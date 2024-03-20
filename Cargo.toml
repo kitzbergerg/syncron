@@ -9,3 +9,5 @@ edition = "2021"
 blake3 = { version = "1.5.1", features = ["mmap", "rayon"] }
 memmap2 = "0.9.4"
 rayon = "1.9.0"
+jwalk = "0.8.1"
+ignore = "0.4.22"

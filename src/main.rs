@@ -23,8 +23,8 @@
 //! A possibility later on would be to add n-to-n file sync, so not just between two binaries.
 
 //! # Implementation iterations
-//! 1. Manually scan. Build merkle tree. Small filesystem. Goal: Get a feel for it
-//! 2. Add .gitignore feature. Goal: Allow for excluding certain files from being synced
+//! 1. Manually scan. Add .gitignore feature. Small filesystem. Goal: Get a feel for it
+//! 2. Build merkle tree. Goal: Keep state of directory scan
 //! 3. Increase size and complexity of filesystem. Try around with how change detection happens for many changes (e.g when script instead of users modify files). Switch to periodic scans. Goal: Improve performance and robustness of filesystem scans
 //! 4. Remote in server mode, local in client mode. No changes on server, client only sends changes to server. Goal: Proof of concept
 //! 5. Changes on remote as well. Goal: Full simple feature-set
