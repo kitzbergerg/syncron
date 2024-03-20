@@ -39,7 +39,7 @@
 
 use std::path::Path;
 
-use crate::{filesystem::scan::scan_directory_recursive, merkle_tree::merkle_tree::Directory};
+use crate::{filesystem::scan::walk_directory, merkle_tree::merkle_tree::Directory};
 
 mod filesystem;
 mod merkle_tree;
@@ -47,5 +47,5 @@ mod merkle_tree;
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
     let path = Path::new(TEST_DIR);
-    scan_directory_recursive(path);
+    walk_directory(path);
 }
