@@ -23,47 +23,63 @@
 //! A possibility later on would be to add n-to-n file sync, so not just between two binaries.
 
 //! # Implementation iterations
-//! 1. Manually scan. Add .gitignore feature. Small filesystem. Goal: Get a feel for it
-//! 2. Build merkle tree. Goal: Keep state of directory scan
-//! 3. Increase size and complexity of filesystem. Try around with how change detection happens for many changes (e.g when script instead of users modify files). Switch to periodic scans. Goal: Improve performance and robustness of filesystem scans
-//! 4. Remote in server mode, local in client mode. No changes on server, client only sends changes to server. Goal: Proof of concept
-//! 5. Changes on remote as well. Goal: Full simple feature-set
-//! 6. Run both local and remote in client-server mode. Goal: Switch to decentralized approach
-//! 7. Add multithreading (for scans, file upload/download, possibly merkle tree). Goal: performance improvement
-//! 8. Add .secure file handling automatic encryption of specified files. n-to-n filesync. Think about conflict resolution without using timestamps (problem with out of sync clocks or concurrent modifications). Goal: It's cool
+//! ~~1. Manually scan. Add .gitignore feature. Small filesystem. Goal: Get a feel for it~~  
+//! 2. Build merkle tree. Goal: Keep state of directory scan  
+//! 3. Increase size and complexity of filesystem. Try around with how change detection happens for many changes (e.g when script instead of users modify files). Switch to periodic scans. Goal: Improve performance and robustness of filesystem scans  
+//! 4. Add file watchers for frequently change directories. Goal: Faster sync for important areas
+//! 5. Remote in server mode, local in client mode. No changes on server, client only sends changes to server. Goal: Proof of concept  
+//! 6. Add multithreading (for scans, file upload/download, possibly merkle tree). Goal: performance improvement  
+//! 7. Changes on remote as well. Goal: Full simple feature-set  
+//! 8. Run both local and remote in client-server mode. Goal: Switch to decentralized approach  
+//! 9. Add .secure file handling automatic encryption of specified files. n-to-n filesync. Think about conflict resolution without using timestamps (problem with out of sync clocks or concurrent modifications). Goal: It's cool  
 
 //! # Implementation details
-//! Use update_mmap from blake3 for file hashing (requires mmap feature). Use update_mmap_rayon (requires rayon feature) for large files.
+//! Use [update_mmap_rayon](blake3::Hasher::update_mmap_rayon) from [blake3] for file hashing.
 //! Test whether to use rayon or tokio (and possibly io_uring for linux and IoRing for windows) to scan directories and build index.
 //! Test memmap2 vs async IO when syncing files. Requires locking files for safety.
 
 use std::path::Path;
 
-use merkle_tree::merkle_tree::Tree;
+use datastructures::merkle_tree::Tree;
+use filesystem::scan::{MerkleDir, MerkleEntry};
 
 use crate::filesystem::scan::walk_directory;
 
+mod datastructures;
 mod filesystem;
-mod merkle_tree;
 
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
-    let path = Path::new(TEST_DIR);
-    walk_directory(path);
+    let mut tree = Tree::<String, MerkleEntry>::new(
+        TEST_DIR.to_string(),
+        MerkleEntry::Directory(MerkleDir {
+            path: Path::new(TEST_DIR).to_owned(),
+            last_modified: 0,
+            hash: Vec::new(),
+        }),
+    );
 
-    let mut tree = Tree::<&'static str, &'static str>::new("prefix", "some_data");
-    tree.insert(&["a"], "a");
-    println!("{:?}", tree.get(&["a"]));
+    let receiver = walk_directory(Path::new(TEST_DIR).to_owned());
 
-    tree.insert(&["a", "b"], "b");
-    println!("{:?}", tree.get(&["a", "b"]));
+    while let Ok(mesg) = receiver.recv() {
+        let path = mesg
+            .get_path()
+            .strip_prefix(TEST_DIR)
+            .expect("invalid path");
+        let path_components = path
+            .components()
+            .map(|comp| comp.as_os_str().to_str().unwrap().to_owned())
+            .collect::<Vec<String>>();
+        println!("{path:?}");
+        println!("{path_components:?}");
 
-    tree.update(&["a", "b"], "bbbbb");
-    println!("{:?}", tree.get(&["a", "b"]));
+        tree.insert(&path_components, mesg);
+    }
 
-    tree.insert(&["a", "c"], "c");
-    println!("{:?}", tree.get(&["a", "c"]));
-
-    tree.remove(&["a", "c"]);
-    println!("{:?}", tree.get(&["a"]));
+    let entry = tree.get(&[
+        "src".to_owned(),
+        "filesystem".to_owned(),
+        "mod.rs".to_owned(),
+    ]);
+    println!("{entry:?}");
 }

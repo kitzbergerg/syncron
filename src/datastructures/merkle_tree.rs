@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash, path::PathBuf, ptr::NonNull};
+use std::{collections::HashMap, hash::Hash, ptr::NonNull};
 
 pub struct Tree<K: Eq + Hash + Clone, D> {
     root: TreeNode<K, D>,
@@ -16,19 +16,19 @@ impl<K: Eq + Hash + Clone, D> Tree<K, D> {
     }
 
     pub fn get(&self, segments: &[K]) -> &D {
-        &self.root.get(&segments).data
+        &self.root.get(segments).data
     }
 
     pub fn insert(&mut self, segments: &[K], data: D) {
-        self.root.insert(&segments, data);
+        self.root.insert(segments, data);
     }
 
     pub fn update(&mut self, segments: &[K], data: D) {
-        self.root.update(&segments, data);
+        self.root.update(segments, data);
     }
 
     pub fn remove(&mut self, segments: &[K]) {
-        self.root.remove(&segments);
+        self.root.remove(segments);
     }
 }
 // SAFETY: All modifications require a mutable reference, therefore Tree is Send/Sync if its parts are Send/Sync.
@@ -43,7 +43,7 @@ struct TreeNode<K: Eq + Hash + Clone, D> {
 }
 impl<K: Eq + Hash + Clone, D> TreeNode<K, D> {
     fn get(&self, segments: &[K]) -> &Self {
-        if segments.len() == 0 {
+        if segments.is_empty() {
             return self;
         }
 
@@ -69,7 +69,7 @@ impl<K: Eq + Hash + Clone, D> TreeNode<K, D> {
     }
 
     fn update(&mut self, segments: &[K], data: D) {
-        if segments.len() == 0 {
+        if segments.is_empty() {
             let _ = std::mem::replace(&mut self.data, data);
             return;
         }
@@ -100,22 +100,4 @@ impl<K: Eq + Hash + Clone, D> Drop for TreeNode<K, D> {
         // Parent does not need to be dropped because it does not own the child.
         // The parent's existence is managed by its own scope/lifetime.
     }
-}
-
-pub struct File {
-    path: PathBuf,
-    last_modified: u64,
-    file_size: u64,
-    hash: Vec<u8>,
-}
-pub struct Directory {
-    path: PathBuf,
-    last_modified: u64,
-    /// In case the directory is empty uses the path as hash.
-    hash: Vec<u8>,
-}
-
-pub enum Entry {
-    Directory(Directory),
-    File(File),
 }

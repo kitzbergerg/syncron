@@ -1,22 +1,90 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+    sync::mpsc::{channel, Receiver},
+    time::SystemTime,
+};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jwalk::WalkDirGeneric;
+#[derive(Debug)]
+pub struct MerkleFile {
+    pub path: PathBuf,
+    pub last_modified: u64,
+    pub file_size: u64,
+    pub hash: Vec<u8>,
+}
+#[derive(Debug)]
+pub struct MerkleDir {
+    pub path: PathBuf,
+    pub last_modified: u64,
+    /// In case the directory is empty uses the path as hash.
+    pub hash: Vec<u8>,
+}
 
-pub fn walk_directory(path: &Path) {
-    walk_dir(path)
-        .into_iter()
-        .map(|file| file.expect("unable to read file"))
-        .for_each(|file| {
-            if file.file_type().is_file() {
+#[derive(Debug)]
+pub enum MerkleEntry {
+    Directory(MerkleDir),
+    File(MerkleFile),
+}
+impl MerkleEntry {
+    pub fn get_path(&self) -> &Path {
+        match &self {
+            Self::Directory(dir) => &dir.path,
+            Self::File(file) => &file.path,
+        }
+    }
+}
+
+pub fn walk_directory(path: PathBuf) -> Receiver<MerkleEntry> {
+    let (sender, receiver) = channel();
+
+    rayon::spawn(move || {
+        walk_dir(&path)
+            .into_iter()
+            // skip root
+            .skip(1)
+            .map(|file| file.expect("unable to read file"))
+            .for_each(|file| {
                 let filepath = file.path();
-                let mut hasher = blake3::Hasher::new();
-                hasher.update_mmap_rayon(&filepath).expect("unable to hash");
-                let hash = hasher.finalize();
+                let filetype = file.file_type();
+                if filetype.is_dir() {
+                    sender
+                        .send(MerkleEntry::Directory(MerkleDir {
+                            path: filepath,
+                            last_modified: 0,
+                            hash: Vec::new(),
+                        }))
+                        .expect("unable to send");
+                    return;
+                }
+                if filetype.is_file() {
+                    // TODO: open and read filedata only once. Possibly copy impl of update_mmap_rayon.
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update_mmap_rayon(&filepath).expect("unable to hash");
+                    let hash = hasher.finalize();
 
-                println!("File: {:?}, Hash: {}", filepath, hash.to_hex())
-            }
-        });
+                    let file = File::open(&filepath).expect("unable to open file");
+                    let metadata = file.metadata().expect("unable to read metadata");
+                    let last_modified = metadata
+                        .modified()
+                        .expect("unable to read last modified")
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+
+                    sender
+                        .send(MerkleEntry::File(MerkleFile {
+                            path: filepath,
+                            last_modified,
+                            file_size: metadata.len(),
+                            hash: hash.as_bytes().to_vec(),
+                        }))
+                        .expect("unable to send");
+                }
+            });
+    });
+    receiver
 }
 
 fn walk_dir(path: &Path) -> WalkDirGeneric<(JwalkState, ())> {
@@ -32,7 +100,7 @@ fn walk_dir(path: &Path) -> WalkDirGeneric<(JwalkState, ())> {
     let is_in_git_repo = path
         .ancestors()
         .skip(1)
-        .inspect(|ancestor| add_ignore_if_exists(&ancestor, &mut gitignore_files))
+        .inspect(|ancestor| add_ignore_if_exists(ancestor, &mut gitignore_files))
         .any(|ancestor| ancestor.join(".git").is_dir());
     if is_in_git_repo {
         gitignore_files.reverse();
