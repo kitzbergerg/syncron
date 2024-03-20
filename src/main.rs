@@ -39,7 +39,9 @@
 
 use std::path::Path;
 
-use crate::{filesystem::scan::walk_directory, merkle_tree::merkle_tree::Directory};
+use merkle_tree::merkle_tree::Tree;
+
+use crate::filesystem::scan::walk_directory;
 
 mod filesystem;
 mod merkle_tree;
@@ -48,4 +50,20 @@ const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
     let path = Path::new(TEST_DIR);
     walk_directory(path);
+
+    let mut tree = Tree::<&'static str, &'static str>::new("prefix", "some_data");
+    tree.insert(&["a"], "a");
+    println!("{:?}", tree.get(&["a"]));
+
+    tree.insert(&["a", "b"], "b");
+    println!("{:?}", tree.get(&["a", "b"]));
+
+    tree.update(&["a", "b"], "bbbbb");
+    println!("{:?}", tree.get(&["a", "b"]));
+
+    tree.insert(&["a", "c"], "c");
+    println!("{:?}", tree.get(&["a", "c"]));
+
+    tree.remove(&["a", "c"]);
+    println!("{:?}", tree.get(&["a"]));
 }
