@@ -2,14 +2,15 @@ use std::{collections::BTreeMap, ptr::NonNull};
 
 use blake3::Hash;
 
-use crate::filesystem::scan::MerkleEntry;
+use crate::filesystem::data::MerkleEntry;
 
-pub struct Tree<K> {
+
+pub struct MerkleTree<K: AsRef<[u8]>> {
     root: TreeNode<K>,
 }
-impl<K: Eq + Ord + Clone> Tree<K> {
-    pub fn new(root_segment: K, data: MerkleEntry) -> Tree<K> {
-        Tree {
+impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
+    pub fn new(root_segment: K, data: MerkleEntry) -> MerkleTree<K> {
+        MerkleTree {
             root: TreeNode {
                 parent: Option::None,
                 children: BTreeMap::new(),
@@ -39,24 +40,34 @@ impl<K: Eq + Ord + Clone> Tree<K> {
     pub fn remove(&mut self, segments: &[K]) {
         self.root.remove(segments);
     }
+
+    pub fn find_difference(&self, other: &Self) -> Option< Vec<K>> {
+        if self.root.hash == other.root.hash {
+            return None;
+        } 
+
+        todo!();
+        self.root.children.into_values().zip(other)
+    }
 }
 // SAFETY: All modifications require a mutable reference, therefore Tree is Send/Sync if its parts are Send/Sync.
-unsafe impl<K: Send> Send for Tree<K> {}
-unsafe impl<K: Sync> Sync for Tree<K> {}
+unsafe impl<K: Send + AsRef<[u8]>> Send for MerkleTree<K> {}
+unsafe impl<K: Sync + AsRef<[u8]>> Sync for MerkleTree<K> {}
 
-struct TreeNode<K> {
+struct TreeNode<K: AsRef<[u8]>> {
     parent: Option<NonNull<TreeNode<K>>>,
     children: BTreeMap<K, NonNull<TreeNode<K>>>,
     segment: K,
     hash: Hash,
     data: MerkleEntry,
 }
-impl<K: Eq + Ord + Clone> TreeNode<K> {
+impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
     fn recompute_hash(&mut self) {
         if self.children.is_empty() {
             return;
         }
         let mut hasher = blake3::Hasher::new();
+        hasher.update(self.segment.as_ref());
         self.children.values().for_each(|child| unsafe {
             hasher.update(child.as_ref().hash.as_bytes());
         });
@@ -116,7 +127,7 @@ impl<K: Eq + Ord + Clone> TreeNode<K> {
     }
 }
 
-impl<K> Drop for TreeNode<K> {
+impl<K: AsRef<[u8]>> Drop for TreeNode<K> {
     fn drop(&mut self) {
         for child_ptr in self.children.values() {
             // SAFETY: This ensures the Box will be properly dropped after this scope, deallocating the memory.

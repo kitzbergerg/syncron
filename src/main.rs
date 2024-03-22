@@ -38,10 +38,10 @@
 //! Test whether to use rayon or tokio (and possibly io_uring for linux and IoRing for windows) to scan directories and build index.
 //! Test memmap2 vs async IO when syncing files. Requires locking files for safety.
 
-use std::path::Path;
+use std::{path::Path, thread::sleep, time::Duration};
 
-use datastructures::merkle_tree::Tree;
-use filesystem::scan::{MerkleDir, MerkleEntry};
+use datastructures::merkle_tree::MerkleTree;
+use filesystem::data::{MerkleDir, MerkleEntry};
 
 use crate::filesystem::scan::walk_directory;
 
@@ -50,12 +50,24 @@ mod filesystem;
 
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
-    let mut tree = Tree::<String>::new(
+    let mut tree1 = compute_tree();
+    let mut tree2;
+
+    loop {
+        tree2 = compute_tree();
+        let _ = tree1.find_difference(&tree2);
+        sleep(Duration::from_millis(100));
+
+        tree1 = compute_tree();
+        let _ = tree1.find_difference(&tree2);
+        sleep(Duration::from_millis(100));
+    }
+}
+
+fn compute_tree() -> MerkleTree<String> {
+    let mut tree = MerkleTree::<String>::new(
         TEST_DIR.to_string(),
-        MerkleEntry::Directory(MerkleDir {
-            path: Path::new(TEST_DIR).to_owned(),
-            last_modified: 0,
-        }),
+        MerkleEntry::Directory(MerkleDir::from_path(Path::new(TEST_DIR).to_owned())),
     );
 
     let receiver = walk_directory(Path::new(TEST_DIR).to_owned());
@@ -69,14 +81,8 @@ fn main() {
             .components()
             .map(|comp| comp.as_os_str().to_str().unwrap().to_owned())
             .collect::<Vec<String>>();
-        println!("{path:?}");
 
         tree.insert(&path_components, message);
     }
-
-    let entry = tree.get(&["src".to_owned(), "main.rs".to_owned()]);
-    println!("{entry:?}");
-
-    let entry = tree.get_hash(&[]);
-    println!("{entry:?}");
+    tree
 }

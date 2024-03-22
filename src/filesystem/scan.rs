@@ -1,45 +1,12 @@
 use std::{
-    fs::File,
     path::{Path, PathBuf},
     sync::mpsc::{channel, Receiver},
-    time::SystemTime,
 };
 
-use blake3::{Hash, OUT_LEN};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jwalk::WalkDirGeneric;
-#[derive(Debug)]
-pub struct MerkleFile {
-    pub path: PathBuf,
-    pub last_modified: u64,
-    pub file_size: u64,
-    pub hash: Hash,
-}
-#[derive(Debug)]
-pub struct MerkleDir {
-    pub path: PathBuf,
-    pub last_modified: u64,
-}
 
-#[derive(Debug)]
-pub enum MerkleEntry {
-    Directory(MerkleDir),
-    File(MerkleFile),
-}
-impl MerkleEntry {
-    pub fn get_path(&self) -> &Path {
-        match &self {
-            Self::Directory(dir) => &dir.path,
-            Self::File(file) => &file.path,
-        }
-    }
-    pub fn get_hash(&self) -> Hash {
-        match self {
-            Self::Directory(_) => Hash::from_bytes([0; OUT_LEN]),
-            Self::File(file) => file.hash,
-        }
-    }
-}
+use super::data::MerkleEntry;
 
 pub fn walk_directory(path: PathBuf) -> Receiver<MerkleEntry> {
     let (sender, receiver) = channel();
@@ -51,41 +18,9 @@ pub fn walk_directory(path: PathBuf) -> Receiver<MerkleEntry> {
             .skip(1)
             .map(|file| file.expect("unable to read file"))
             .for_each(|file| {
-                let filepath = file.path();
-                let filetype = file.file_type();
-                if filetype.is_dir() {
-                    sender
-                        .send(MerkleEntry::Directory(MerkleDir {
-                            path: filepath,
-                            last_modified: 0,
-                        }))
-                        .expect("unable to send");
-                    return;
-                }
-                if filetype.is_file() {
-                    // TODO: open and read file data only once. Possibly copy impl of update_mmap_rayon.
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update_mmap_rayon(&filepath).expect("unable to hash");
-                    let hash = hasher.finalize();
-
-                    let file = File::open(&filepath).expect("unable to open file");
-                    let metadata = file.metadata().expect("unable to read metadata");
-                    let last_modified = metadata
-                        .modified()
-                        .expect("unable to read last modified")
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-
-                    sender
-                        .send(MerkleEntry::File(MerkleFile {
-                            path: filepath,
-                            last_modified,
-                            file_size: metadata.len(),
-                            hash,
-                        }))
-                        .expect("unable to send");
-                }
+                sender
+                    .send(MerkleEntry::from_path(file.path()))
+                    .expect("unable to send");
             });
     });
     receiver
