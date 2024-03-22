@@ -31,7 +31,7 @@
 //! 6. Add multithreading (for scans, file upload/download, possibly merkle tree). Goal: performance improvement  
 //! 7. Changes on remote as well. Goal: Full simple feature-set  
 //! 8. Run both local and remote in client-server mode. Goal: Switch to decentralized approach  
-//! 9. Add .secure file handling automatic encryption of specified files. n-to-n filesync. Think about conflict resolution without using timestamps (problem with out of sync clocks or concurrent modifications). Goal: It's cool  
+//! 9. Add .secure file handling automatic encryption of specified files. n-to-n file sync. Think about conflict resolution without using timestamps (problem with out of sync clocks or concurrent modifications). Goal: It's cool  
 
 //! # Implementation details
 //! Use [update_mmap_rayon](blake3::Hasher::update_mmap_rayon) from [blake3] for file hashing.
@@ -50,19 +50,18 @@ mod filesystem;
 
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
-    let mut tree = Tree::<String, MerkleEntry>::new(
+    let mut tree = Tree::<String>::new(
         TEST_DIR.to_string(),
         MerkleEntry::Directory(MerkleDir {
             path: Path::new(TEST_DIR).to_owned(),
             last_modified: 0,
-            hash: Vec::new(),
         }),
     );
 
     let receiver = walk_directory(Path::new(TEST_DIR).to_owned());
 
-    while let Ok(mesg) = receiver.recv() {
-        let path = mesg
+    while let Ok(message) = receiver.recv() {
+        let path = message
             .get_path()
             .strip_prefix(TEST_DIR)
             .expect("invalid path");
@@ -71,15 +70,13 @@ fn main() {
             .map(|comp| comp.as_os_str().to_str().unwrap().to_owned())
             .collect::<Vec<String>>();
         println!("{path:?}");
-        println!("{path_components:?}");
 
-        tree.insert(&path_components, mesg);
+        tree.insert(&path_components, message);
     }
 
-    let entry = tree.get(&[
-        "src".to_owned(),
-        "filesystem".to_owned(),
-        "mod.rs".to_owned(),
-    ]);
+    let entry = tree.get(&["src".to_owned(), "main.rs".to_owned()]);
+    println!("{entry:?}");
+
+    let entry = tree.get_hash(&[]);
     println!("{entry:?}");
 }

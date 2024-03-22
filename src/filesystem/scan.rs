@@ -5,6 +5,7 @@ use std::{
     time::SystemTime,
 };
 
+use blake3::{Hash, OUT_LEN};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jwalk::WalkDirGeneric;
 #[derive(Debug)]
@@ -12,14 +13,12 @@ pub struct MerkleFile {
     pub path: PathBuf,
     pub last_modified: u64,
     pub file_size: u64,
-    pub hash: Vec<u8>,
+    pub hash: Hash,
 }
 #[derive(Debug)]
 pub struct MerkleDir {
     pub path: PathBuf,
     pub last_modified: u64,
-    /// In case the directory is empty uses the path as hash.
-    pub hash: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -32,6 +31,12 @@ impl MerkleEntry {
         match &self {
             Self::Directory(dir) => &dir.path,
             Self::File(file) => &file.path,
+        }
+    }
+    pub fn get_hash(&self) -> Hash {
+        match self {
+            Self::Directory(_) => Hash::from_bytes([0; OUT_LEN]),
+            Self::File(file) => file.hash,
         }
     }
 }
@@ -53,13 +58,12 @@ pub fn walk_directory(path: PathBuf) -> Receiver<MerkleEntry> {
                         .send(MerkleEntry::Directory(MerkleDir {
                             path: filepath,
                             last_modified: 0,
-                            hash: Vec::new(),
                         }))
                         .expect("unable to send");
                     return;
                 }
                 if filetype.is_file() {
-                    // TODO: open and read filedata only once. Possibly copy impl of update_mmap_rayon.
+                    // TODO: open and read file data only once. Possibly copy impl of update_mmap_rayon.
                     let mut hasher = blake3::Hasher::new();
                     hasher.update_mmap_rayon(&filepath).expect("unable to hash");
                     let hash = hasher.finalize();
@@ -78,7 +82,7 @@ pub fn walk_directory(path: PathBuf) -> Receiver<MerkleEntry> {
                             path: filepath,
                             last_modified,
                             file_size: metadata.len(),
-                            hash: hash.as_bytes().to_vec(),
+                            hash,
                         }))
                         .expect("unable to send");
                 }

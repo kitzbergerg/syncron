@@ -1,29 +1,38 @@
-use std::{collections::HashMap, hash::Hash, ptr::NonNull};
+use std::{collections::BTreeMap, ptr::NonNull};
 
-pub struct Tree<K: Eq + Hash + Clone, D> {
-    root: TreeNode<K, D>,
+use blake3::Hash;
+
+use crate::filesystem::scan::MerkleEntry;
+
+pub struct Tree<K> {
+    root: TreeNode<K>,
 }
-impl<K: Eq + Hash + Clone, D> Tree<K, D> {
-    pub fn new(root_segment: K, data: D) -> Tree<K, D> {
+impl<K: Eq + Ord + Clone> Tree<K> {
+    pub fn new(root_segment: K, data: MerkleEntry) -> Tree<K> {
         Tree {
             root: TreeNode {
                 parent: Option::None,
-                children: HashMap::new(),
+                children: BTreeMap::new(),
                 segment: root_segment,
+                hash: data.get_hash(),
                 data,
             },
         }
     }
 
-    pub fn get(&self, segments: &[K]) -> &D {
+    pub fn get(&self, segments: &[K]) -> &MerkleEntry {
         &self.root.get(segments).data
     }
 
-    pub fn insert(&mut self, segments: &[K], data: D) {
+    pub fn get_hash(&self, segments: &[K]) -> &Hash {
+        &self.root.get(segments).hash
+    }
+
+    pub fn insert(&mut self, segments: &[K], data: MerkleEntry) {
         self.root.insert(segments, data);
     }
 
-    pub fn update(&mut self, segments: &[K], data: D) {
+    pub fn update(&mut self, segments: &[K], data: MerkleEntry) {
         self.root.update(segments, data);
     }
 
@@ -32,16 +41,28 @@ impl<K: Eq + Hash + Clone, D> Tree<K, D> {
     }
 }
 // SAFETY: All modifications require a mutable reference, therefore Tree is Send/Sync if its parts are Send/Sync.
-unsafe impl<K: Send + Eq + Hash + Clone, D: Send> Send for Tree<K, D> {}
-unsafe impl<K: Sync + Eq + Hash + Clone, D: Sync> Sync for Tree<K, D> {}
+unsafe impl<K: Send> Send for Tree<K> {}
+unsafe impl<K: Sync> Sync for Tree<K> {}
 
-struct TreeNode<K: Eq + Hash + Clone, D> {
-    parent: Option<NonNull<TreeNode<K, D>>>,
-    children: HashMap<K, NonNull<TreeNode<K, D>>>,
+struct TreeNode<K> {
+    parent: Option<NonNull<TreeNode<K>>>,
+    children: BTreeMap<K, NonNull<TreeNode<K>>>,
     segment: K,
-    data: D,
+    hash: Hash,
+    data: MerkleEntry,
 }
-impl<K: Eq + Hash + Clone, D> TreeNode<K, D> {
+impl<K: Eq + Ord + Clone> TreeNode<K> {
+    fn recompute_hash(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut hasher = blake3::Hasher::new();
+        self.children.values().for_each(|child| unsafe {
+            hasher.update(child.as_ref().hash.as_bytes());
+        });
+        self.hash = hasher.finalize();
+    }
+
     fn get(&self, segments: &[K]) -> &Self {
         if segments.is_empty() {
             return self;
@@ -51,31 +72,34 @@ impl<K: Eq + Hash + Clone, D> TreeNode<K, D> {
         return unsafe { next_node.as_ref().get(&segments[1..]) };
     }
 
-    fn insert(&mut self, segments: &[K], data: D) {
+    fn insert(&mut self, segments: &[K], data: MerkleEntry) {
         if segments.len() == 1 {
             let new_node = TreeNode {
                 parent: Some(self.into()),
-                children: HashMap::new(),
+                children: BTreeMap::new(),
                 segment: segments[0].clone(),
+                hash: data.get_hash(),
                 data,
             };
             let child_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new_node))) };
             self.children.insert(segments[0].clone(), child_ptr);
-            return;
+        } else {
+            let mut next_node = *self.children.get(&segments[0]).expect("not such node");
+            unsafe { next_node.as_mut().insert(&segments[1..], data) };
         }
 
-        let mut next_node = *self.children.get(&segments[0]).expect("not such node");
-        unsafe { next_node.as_mut().insert(&segments[1..], data) };
+        self.recompute_hash();
     }
 
-    fn update(&mut self, segments: &[K], data: D) {
+    fn update(&mut self, segments: &[K], data: MerkleEntry) {
         if segments.is_empty() {
-            let _ = std::mem::replace(&mut self.data, data);
+            self.data = data;
             return;
         }
 
         let mut next_node = *self.children.get(&segments[0]).expect("not such node");
         unsafe { next_node.as_mut().update(&segments[1..], data) };
+        self.recompute_hash();
     }
 
     fn remove(&mut self, segments: &[K]) {
@@ -88,12 +112,13 @@ impl<K: Eq + Hash + Clone, D> TreeNode<K, D> {
 
         let mut next_node = *self.children.get(&segments[0]).expect("not such node");
         unsafe { next_node.as_mut().remove(&segments[1..]) };
+        self.recompute_hash();
     }
 }
 
-impl<K: Eq + Hash + Clone, D> Drop for TreeNode<K, D> {
+impl<K> Drop for TreeNode<K> {
     fn drop(&mut self) {
-        for (_, child_ptr) in self.children.drain() {
+        for child_ptr in self.children.values() {
             // SAFETY: This ensures the Box will be properly dropped after this scope, deallocating the memory.
             let _ = unsafe { Box::from_raw(child_ptr.as_ptr()) };
         }
