@@ -1,7 +1,7 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
-    path::{Path, PathBuf},
+    path::Path,
     ptr::NonNull,
     time::UNIX_EPOCH,
 };
@@ -9,6 +9,8 @@ use std::{
 use blake3::Hash as BHash;
 
 use crate::filesystem::data::MerkleEntry;
+
+type TreeNodeDiffResult<'a> = HashMap<&'a BHash, (u64, &'a MerkleEntry)>;
 
 pub struct MerkleTree<K: AsRef<[u8]>> {
     root: TreeNode<K>,
@@ -37,10 +39,6 @@ impl<K: Eq + Ord + Clone + Hash + AsRef<[u8]>> MerkleTree<K> {
 
     pub fn insert(&mut self, segments: &[K], data: MerkleEntry) {
         self.root.insert(segments, data);
-    }
-
-    pub fn update(&mut self, segments: &[K], data: MerkleEntry) {
-        self.root.update(segments, data);
     }
 
     pub fn remove(&mut self, segments: &[K]) {
@@ -125,23 +123,15 @@ impl<K: Eq + Ord + Clone + Hash + AsRef<[u8]>> TreeNode<K> {
                 data,
             };
             let child_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new_node))) };
-            self.children.insert(segments[0].clone(), child_ptr);
+            if let Some(old_node) = self.children.insert(segments[0].clone(), child_ptr) {
+                // SAFETY: This ensures the Box will be properly dropped after this scope, deallocating the memory.
+                let _ = unsafe { Box::from_raw(old_node.as_ptr()) };
+            }
         } else {
             let mut next_node = *self.children.get(&segments[0]).expect("not such node");
             unsafe { next_node.as_mut().insert(&segments[1..], data) };
         }
 
-        self.recompute_node();
-    }
-
-    fn update(&mut self, segments: &[K], data: MerkleEntry) {
-        if segments.is_empty() {
-            self.data = data;
-            return;
-        }
-
-        let mut next_node = *self.children.get(&segments[0]).expect("not such node");
-        unsafe { next_node.as_mut().update(&segments[1..], data) };
         self.recompute_node();
     }
 
@@ -161,10 +151,7 @@ impl<K: Eq + Ord + Clone + Hash + AsRef<[u8]>> TreeNode<K> {
     fn find_difference<'a>(
         &'a self,
         other: &'a Self,
-    ) -> Option<(
-        HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
-        HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
-    )> {
+    ) -> Option<(TreeNodeDiffResult, TreeNodeDiffResult)> {
         if self.hash == other.hash {
             // if hashes are the same, we have the same content
             return None;
@@ -230,10 +217,7 @@ impl<K: AsRef<[u8]>> Drop for TreeNode<K> {
 fn find_diff_in_children<'a, K: Eq + Ord + Hash + Clone + AsRef<[u8]>>(
     self_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
     other_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
-) -> Option<(
-    HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
-    HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
-)> {
+) -> Option<(TreeNodeDiffResult<'a>, TreeNodeDiffResult<'a>)> {
     let mut diff1 = HashMap::new();
     let mut diff2 = HashMap::new();
     let mut common = Vec::new(); // To store common keys for further processing
@@ -290,7 +274,7 @@ fn find_diff_in_children<'a, K: Eq + Ord + Hash + Clone + AsRef<[u8]>>(
     common
         .iter()
         .filter_map(|(child1, child2)| child1.find_difference(child2))
-        .for_each(|(mut child1, mut child2)| {
+        .for_each(|(child1, child2)| {
             diff1.extend(child1);
             diff2.extend(child2);
         });

@@ -1,2 +1,2 @@
-pub mod scan;
 pub mod data;
+pub mod scan;
