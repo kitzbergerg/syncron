@@ -58,7 +58,7 @@ impl MerkleEntry {
         if path.is_dir() {
             return Self::Directory(Directory::from_path(path));
         }
-        println!("Funny file: {path:?}");
+        // TODO: we sometimes get an error here when renaming a file
         unimplemented!()
     }
 

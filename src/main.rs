@@ -63,6 +63,7 @@ fn main() {
         }
 
         sleep(Duration::from_millis(100));
+        // TODO: merge changes into first tree instead of computing second tree and then switching
         tree2 = compute_tree();
         std::mem::swap(&mut tree1, &mut tree2);
     }

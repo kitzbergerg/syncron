@@ -1,17 +1,19 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    hash::Hash,
+    path::{Path, PathBuf},
     ptr::NonNull,
     time::UNIX_EPOCH,
 };
 
-use blake3::Hash;
+use blake3::Hash as BHash;
 
 use crate::filesystem::data::MerkleEntry;
 
 pub struct MerkleTree<K: AsRef<[u8]>> {
     root: TreeNode<K>,
 }
-impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
+impl<K: Eq + Ord + Clone + Hash + AsRef<[u8]>> MerkleTree<K> {
     pub fn new(root_segment: K, data: MerkleEntry) -> MerkleTree<K> {
         MerkleTree {
             root: TreeNode {
@@ -29,7 +31,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
         &self.root.get(segments).data
     }
 
-    pub fn get_hash(&self, segments: &[K]) -> &Hash {
+    pub fn get_hash(&self, segments: &[K]) -> &BHash {
         &self.root.get(segments).hash
     }
 
@@ -45,9 +47,33 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
         self.root.remove(segments);
     }
 
-    pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
-        // TODO: Add hashes to return as well. We can then use the hashes to detect a move.
-        self.root.find_difference(&other.root)
+    pub fn find_difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> Option<(Vec<&'a Path>, Vec<&'a Path>)> {
+        let (diff1, diff2) = match self.root.find_difference(&other.root) {
+            Some(inner) => inner,
+            None => return None,
+        };
+
+        // TODO: figure out what to do with moves
+        let keys1 = diff1.keys().collect::<HashSet<_>>();
+        let keys2 = diff2.keys().collect::<HashSet<_>>();
+        let moved_entries = keys1.intersection(&keys2).collect::<HashSet<_>>();
+        moved_entries.iter().for_each(|hash| {
+            let (l1, entry1) = diff1.get(**hash).unwrap();
+            let (l2, entry2) = diff2.get(**hash).unwrap();
+            if l1 < l2 {
+                println!("{:?} moved to {:?}", entry1.get_path(), entry2.get_path());
+            } else {
+                println!("{:?} moved to {:?}", entry2.get_path(), entry1.get_path());
+            };
+        });
+
+        Some((
+            diff1.values().map(|(_, entry)| entry.get_path()).collect(),
+            diff2.values().map(|(_, entry)| entry.get_path()).collect(),
+        ))
     }
 }
 // SAFETY: All modifications require a mutable reference, therefore Tree is Send/Sync if its parts are Send/Sync.
@@ -59,12 +85,12 @@ struct TreeNode<K: AsRef<[u8]>> {
     children: BTreeMap<K, NonNull<TreeNode<K>>>,
     segment: K,
     /// indicates if the contents of this node (its children and/or its data) changed
-    hash: Hash,
+    hash: BHash,
     last_modified: u64,
     // TODO: this can probably be removed
     data: MerkleEntry,
 }
-impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
+impl<K: Eq + Ord + Clone + Hash + AsRef<[u8]>> TreeNode<K> {
     fn recompute_node(&mut self) {
         if self.children.is_empty() {
             return;
@@ -132,7 +158,13 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
         self.recompute_node();
     }
 
-    fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+    fn find_difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> Option<(
+        HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
+        HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
+    )> {
         if self.hash == other.hash {
             // if hashes are the same, we have the same content
             return None;
@@ -143,16 +175,41 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
         let b_empty = other.children.is_empty();
         if a_empty && b_empty {
             if self.last_modified > other.last_modified {
-                return Some((vec![&self.segment], vec![]));
+                return Some((
+                    HashMap::from([(&self.hash, (self.last_modified, &self.data))]),
+                    HashMap::new(),
+                ));
             } else {
-                return Some((vec![], vec![&other.segment]));
+                return Some((
+                    HashMap::new(),
+                    HashMap::from([(&other.hash, (self.last_modified, &other.data))]),
+                ));
             }
         }
         if a_empty {
-            return Some((vec![], other.children.keys().collect()));
+            return Some((
+                HashMap::new(),
+                other
+                    .children
+                    .values()
+                    .map(|value| {
+                        let node = unsafe { value.as_ref() };
+                        (&node.hash, (node.last_modified, &node.data))
+                    })
+                    .collect(),
+            ));
         }
         if b_empty {
-            return Some((self.children.keys().collect(), vec![]));
+            return Some((
+                self.children
+                    .values()
+                    .map(|value| {
+                        let node = unsafe { value.as_ref() };
+                        (&node.hash, (node.last_modified, &node.data))
+                    })
+                    .collect(),
+                HashMap::new(),
+            ));
         }
 
         find_diff_in_children(&self.children, &other.children)
@@ -170,12 +227,15 @@ impl<K: AsRef<[u8]>> Drop for TreeNode<K> {
     }
 }
 
-fn find_diff_in_children<'a, K: Eq + Ord + Clone + AsRef<[u8]>>(
+fn find_diff_in_children<'a, K: Eq + Ord + Hash + Clone + AsRef<[u8]>>(
     self_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
     other_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
-) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
-    let mut diff1 = Vec::new();
-    let mut diff2 = Vec::new();
+) -> Option<(
+    HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
+    HashMap<&'a BHash, (u64, &'a MerkleEntry)>,
+)> {
+    let mut diff1 = HashMap::new();
+    let mut diff2 = HashMap::new();
     let mut common = Vec::new(); // To store common keys for further processing
 
     let mut iter_self = self_children.iter();
@@ -190,12 +250,14 @@ fn find_diff_in_children<'a, K: Eq + Ord + Clone + AsRef<[u8]>>(
                 match key_self.cmp(key_other) {
                     std::cmp::Ordering::Less => {
                         // key_self is unique to self
-                        diff1.push(key_self);
+                        let node = unsafe { value_self.as_ref() };
+                        diff1.insert(&node.hash, (node.last_modified, &node.data));
                         next_self = iter_self.next();
                     }
                     std::cmp::Ordering::Greater => {
                         // key_other is unique to other
-                        diff2.push(key_other);
+                        let node = unsafe { value_other.as_ref() };
+                        diff2.insert(&node.hash, (node.last_modified, &node.data));
                         next_other = iter_other.next();
                     }
                     std::cmp::Ordering::Equal => {
@@ -208,14 +270,16 @@ fn find_diff_in_children<'a, K: Eq + Ord + Clone + AsRef<[u8]>>(
                     }
                 }
             }
-            (Some((key_self, _)), None) => {
+            (Some((_, value_self)), None) => {
                 // Remaining keys in self
-                diff1.push(key_self);
+                let node = unsafe { value_self.as_ref() };
+                diff1.insert(&node.hash, (node.last_modified, &node.data));
                 next_self = iter_self.next();
             }
-            (None, Some((key_other, _))) => {
+            (None, Some((_, value_other))) => {
                 // Remaining keys in other
-                diff2.push(key_other);
+                let node = unsafe { value_other.as_ref() };
+                diff2.insert(&node.hash, (node.last_modified, &node.data));
                 next_other = iter_other.next();
             }
             (None, None) => break,
@@ -227,8 +291,8 @@ fn find_diff_in_children<'a, K: Eq + Ord + Clone + AsRef<[u8]>>(
         .iter()
         .filter_map(|(child1, child2)| child1.find_difference(child2))
         .for_each(|(mut child1, mut child2)| {
-            diff1.append(&mut child1);
-            diff2.append(&mut child2);
+            diff1.extend(child1);
+            diff2.extend(child2);
         });
 
     Some((diff1, diff2))
