@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     ptr::NonNull,
+    time::UNIX_EPOCH,
 };
 
 use blake3::Hash;
@@ -18,6 +19,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
                 children: BTreeMap::new(),
                 segment: root_segment,
                 hash: data.get_hash(),
+                last_modified: data.get_last_modified(),
                 data,
             },
         }
@@ -44,6 +46,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
     }
 
     pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+        // TODO: Add hashes to return as well. We can then use the hashes to detect a move.
         self.root.find_difference(&other.root)
     }
 }
@@ -57,11 +60,12 @@ struct TreeNode<K: AsRef<[u8]>> {
     segment: K,
     /// indicates if the contents of this node (its children and/or its data) changed
     hash: Hash,
+    last_modified: u64,
     // TODO: this can probably be removed
     data: MerkleEntry,
 }
 impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
-    fn recompute_hash(&mut self) {
+    fn recompute_node(&mut self) {
         if self.children.is_empty() {
             return;
         }
@@ -72,6 +76,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
             hasher.update(child.segment.as_ref());
         });
         self.hash = hasher.finalize();
+        self.last_modified = UNIX_EPOCH.elapsed().unwrap().as_secs();
     }
 
     fn get(&self, segments: &[K]) -> &Self {
@@ -90,6 +95,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
                 children: BTreeMap::new(),
                 segment: segments[0].clone(),
                 hash: data.get_hash(),
+                last_modified: data.get_last_modified(),
                 data,
             };
             let child_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(new_node))) };
@@ -99,7 +105,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
             unsafe { next_node.as_mut().insert(&segments[1..], data) };
         }
 
-        self.recompute_hash();
+        self.recompute_node();
     }
 
     fn update(&mut self, segments: &[K], data: MerkleEntry) {
@@ -110,7 +116,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
 
         let mut next_node = *self.children.get(&segments[0]).expect("not such node");
         unsafe { next_node.as_mut().update(&segments[1..], data) };
-        self.recompute_hash();
+        self.recompute_node();
     }
 
     fn remove(&mut self, segments: &[K]) {
@@ -123,37 +129,45 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
 
         let mut next_node = *self.children.get(&segments[0]).expect("not such node");
         unsafe { next_node.as_mut().remove(&segments[1..]) };
-        self.recompute_hash();
+        self.recompute_node();
     }
 
     pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
         if self.hash == other.hash {
+            // if hashes are the same, we have the same content
             return None;
         }
+
+        // if one of both has no children, we found a leaf
         let a_empty = self.children.is_empty();
         let b_empty = other.children.is_empty();
-        if a_empty {
-            if b_empty {
-                // TODO: determine which changed (based on timestamp)
-                return Some((vec![&self.segment], vec![&other.segment]));
+        if a_empty && b_empty {
+            if self.last_modified > other.last_modified {
+                return Some((vec![&self.segment], vec![]));
+            } else {
+                return Some((vec![], vec![&other.segment]));
             }
+        }
+        if a_empty {
             return Some((vec![], other.children.keys().collect()));
         }
         if b_empty {
             return Some((self.children.keys().collect(), vec![]));
         }
 
+        // find the set difference in keys
         let s1 = self.children.keys().collect::<BTreeSet<_>>();
         let s2 = other.children.keys().collect::<BTreeSet<_>>();
         let mut diff1 = s1.difference(&s2).copied().collect::<Vec<_>>();
         let mut diff2 = s2.difference(&s1).copied().collect::<Vec<_>>();
+
+        // if the keys stayed the same, check the children for changes
         s1.intersection(&s2)
             .map(|key| {
                 let child1 = unsafe { self.children.get(key).unwrap().as_ref() };
                 let child2 = unsafe { other.children.get(key).unwrap().as_ref() };
                 (child1, child2)
             })
-            .filter(|(child1, child2)| child1.hash != child2.hash)
             .filter_map(|(child1, child2)| child1.find_difference(child2))
             .for_each(|(mut child1, mut child2)| {
                 diff1.append(&mut child1);

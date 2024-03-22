@@ -41,7 +41,7 @@
 use std::{path::Path, thread::sleep, time::Duration};
 
 use datastructures::merkle_tree::MerkleTree;
-use filesystem::data::{MerkleDir, MerkleEntry};
+use filesystem::data::MerkleEntry;
 
 use crate::filesystem::scan::walk_directory;
 
@@ -57,7 +57,9 @@ fn main() {
         let diff = tree1.find_difference(&tree2);
         match diff {
             None => println!("No change."),
-            Some((diff1, diff2)) => println!("Changed locally: {diff1:?}, changed remote: {diff2:?}"),
+            Some((diff1, diff2)) => {
+                println!("Changed locally: {diff1:?}, changed remote: {diff2:?}")
+            }
         }
 
         sleep(Duration::from_millis(100));
@@ -69,7 +71,7 @@ fn main() {
 fn compute_tree() -> MerkleTree<String> {
     let mut tree = MerkleTree::<String>::new(
         TEST_DIR.to_string(),
-        MerkleEntry::Directory(MerkleDir::from_path(Path::new(TEST_DIR).to_owned())),
+        MerkleEntry::from_path(Path::new(TEST_DIR).to_owned()),
     );
 
     let receiver = walk_directory(Path::new(TEST_DIR).to_owned());

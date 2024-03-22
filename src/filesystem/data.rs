@@ -7,10 +7,9 @@ use std::{
 
 #[derive(Debug)]
 pub struct MerkleFile {
-    pub path: PathBuf,
-    pub last_modified: u64,
-    pub file_size: u64,
-    pub hash: Hash,
+    path: PathBuf,
+    last_modified: u64,
+    hash: Hash,
 }
 impl MerkleFile {
     fn from_path(path: PathBuf) -> Self {
@@ -31,32 +30,25 @@ impl MerkleFile {
         Self {
             path,
             last_modified,
-            file_size: metadata.len(),
             hash,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct MerkleDir {
-    pub path: PathBuf,
-    pub last_modified: u64,
-    pub hash: Hash,
+pub struct Directory {
+    path: PathBuf,
 }
-impl MerkleDir {
-    pub fn from_path(path: PathBuf) -> Self {
-        Self {
-            path,
-            last_modified: 0,
-            hash: Hash::from_bytes([0; OUT_LEN]),
-        }
+impl Directory {
+    fn from_path(path: PathBuf) -> Self {
+        Self { path }
     }
 }
 
 #[derive(Debug)]
 pub enum MerkleEntry {
-    Directory(MerkleDir),
     File(MerkleFile),
+    Directory(Directory),
 }
 impl MerkleEntry {
     pub fn from_path(path: PathBuf) -> Self {
@@ -64,8 +56,9 @@ impl MerkleEntry {
             return Self::File(MerkleFile::from_path(path));
         }
         if path.is_dir() {
-            return Self::Directory(MerkleDir::from_path(path));
+            return Self::Directory(Directory::from_path(path));
         }
+        println!("Funny file: {path:?}");
         unimplemented!()
     }
 
@@ -77,8 +70,14 @@ impl MerkleEntry {
     }
     pub fn get_hash(&self) -> Hash {
         match self {
-            Self::Directory(dir) => dir.hash, // default value that will be recomputed in tree
             Self::File(file) => file.hash,
+            Self::Directory(_) => Hash::from_bytes([0; OUT_LEN]), // default value that will be recomputed in tree
+        }
+    }
+    pub fn get_last_modified(&self) -> u64 {
+        match self {
+            Self::File(file) => file.last_modified,
+            Self::Directory(_) => 0, // default value that will be recomputed in tree
         }
     }
 }
