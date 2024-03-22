@@ -51,16 +51,18 @@ mod filesystem;
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
 fn main() {
     let mut tree1 = compute_tree();
-    let mut tree2;
+    let mut tree2 = compute_tree();
 
     loop {
-        tree2 = compute_tree();
-        let _ = tree1.find_difference(&tree2);
-        sleep(Duration::from_millis(100));
+        let diff = tree1.find_difference(&tree2);
+        match diff {
+            None => println!("No change."),
+            Some((diff1, diff2)) => println!("Changed locally: {diff1:?}, changed remote: {diff2:?}"),
+        }
 
-        tree1 = compute_tree();
-        let _ = tree1.find_difference(&tree2);
         sleep(Duration::from_millis(100));
+        tree2 = compute_tree();
+        std::mem::swap(&mut tree1, &mut tree2);
     }
 }
 

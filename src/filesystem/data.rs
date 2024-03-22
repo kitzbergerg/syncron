@@ -1,4 +1,4 @@
-use blake3::Hash;
+use blake3::{Hash, OUT_LEN};
 use std::{
     fs::File,
     path::{Path, PathBuf},
@@ -25,7 +25,6 @@ impl MerkleFile {
 
         // TODO: open and read file data only once. Possibly copy impl of update_mmap_rayon.
         let mut hasher = blake3::Hasher::new();
-        hasher.update(path.file_name().unwrap().as_encoded_bytes());
         hasher.update_mmap_rayon(&path).expect("unable to hash");
         let hash = hasher.finalize();
 
@@ -46,13 +45,10 @@ pub struct MerkleDir {
 }
 impl MerkleDir {
     pub fn from_path(path: PathBuf) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(path.file_name().unwrap().as_encoded_bytes());
-
         Self {
             path,
             last_modified: 0,
-            hash: hasher.finalize(),
+            hash: Hash::from_bytes([0; OUT_LEN]),
         }
     }
 }

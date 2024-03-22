@@ -1,9 +1,11 @@
-use std::{collections::BTreeMap, ptr::NonNull};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ptr::NonNull,
+};
 
 use blake3::Hash;
 
 use crate::filesystem::data::MerkleEntry;
-
 
 pub struct MerkleTree<K: AsRef<[u8]>> {
     root: TreeNode<K>,
@@ -41,13 +43,8 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> MerkleTree<K> {
         self.root.remove(segments);
     }
 
-    pub fn find_difference(&self, other: &Self) -> Option< Vec<K>> {
-        if self.root.hash == other.root.hash {
-            return None;
-        } 
-
-        todo!();
-        self.root.children.into_values().zip(other)
+    pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+        self.root.find_difference(&other.root)
     }
 }
 // SAFETY: All modifications require a mutable reference, therefore Tree is Send/Sync if its parts are Send/Sync.
@@ -58,7 +55,9 @@ struct TreeNode<K: AsRef<[u8]>> {
     parent: Option<NonNull<TreeNode<K>>>,
     children: BTreeMap<K, NonNull<TreeNode<K>>>,
     segment: K,
+    /// indicates if the contents of this node (its children and/or its data) changed
     hash: Hash,
+    // TODO: this can probably be removed
     data: MerkleEntry,
 }
 impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
@@ -67,9 +66,10 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
             return;
         }
         let mut hasher = blake3::Hasher::new();
-        hasher.update(self.segment.as_ref());
         self.children.values().for_each(|child| unsafe {
-            hasher.update(child.as_ref().hash.as_bytes());
+            let child = child.as_ref();
+            hasher.update(child.hash.as_bytes());
+            hasher.update(child.segment.as_ref());
         });
         self.hash = hasher.finalize();
     }
@@ -124,6 +124,43 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
         let mut next_node = *self.children.get(&segments[0]).expect("not such node");
         unsafe { next_node.as_mut().remove(&segments[1..]) };
         self.recompute_hash();
+    }
+
+    pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+        if self.hash == other.hash {
+            return None;
+        }
+        let a_empty = self.children.is_empty();
+        let b_empty = other.children.is_empty();
+        if a_empty {
+            if b_empty {
+                // TODO: determine which changed (based on timestamp)
+                return Some((vec![&self.segment], vec![&other.segment]));
+            }
+            return Some((vec![], other.children.keys().collect()));
+        }
+        if b_empty {
+            return Some((self.children.keys().collect(), vec![]));
+        }
+
+        let s1 = self.children.keys().collect::<BTreeSet<_>>();
+        let s2 = other.children.keys().collect::<BTreeSet<_>>();
+        let mut diff1 = s1.difference(&s2).copied().collect::<Vec<_>>();
+        let mut diff2 = s2.difference(&s1).copied().collect::<Vec<_>>();
+        s1.intersection(&s2)
+            .map(|key| {
+                let child1 = unsafe { self.children.get(key).unwrap().as_ref() };
+                let child2 = unsafe { other.children.get(key).unwrap().as_ref() };
+                (child1, child2)
+            })
+            .filter(|(child1, child2)| child1.hash != child2.hash)
+            .filter_map(|(child1, child2)| child1.find_difference(child2))
+            .for_each(|(mut child1, mut child2)| {
+                diff1.append(&mut child1);
+                diff2.append(&mut child2);
+            });
+
+        Some((diff1, diff2))
     }
 }
 
