@@ -132,7 +132,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
         self.recompute_node();
     }
 
-    pub fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+    fn find_difference<'a>(&'a self, other: &'a Self) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
         if self.hash == other.hash {
             // if hashes are the same, we have the same content
             return None;
@@ -155,26 +155,7 @@ impl<K: Eq + Ord + Clone + AsRef<[u8]>> TreeNode<K> {
             return Some((self.children.keys().collect(), vec![]));
         }
 
-        // find the set difference in keys
-        let s1 = self.children.keys().collect::<BTreeSet<_>>();
-        let s2 = other.children.keys().collect::<BTreeSet<_>>();
-        let mut diff1 = s1.difference(&s2).copied().collect::<Vec<_>>();
-        let mut diff2 = s2.difference(&s1).copied().collect::<Vec<_>>();
-
-        // if the keys stayed the same, check the children for changes
-        s1.intersection(&s2)
-            .map(|key| {
-                let child1 = unsafe { self.children.get(key).unwrap().as_ref() };
-                let child2 = unsafe { other.children.get(key).unwrap().as_ref() };
-                (child1, child2)
-            })
-            .filter_map(|(child1, child2)| child1.find_difference(child2))
-            .for_each(|(mut child1, mut child2)| {
-                diff1.append(&mut child1);
-                diff2.append(&mut child2);
-            });
-
-        Some((diff1, diff2))
+        find_diff_in_children(&self.children, &other.children)
     }
 }
 
@@ -187,4 +168,68 @@ impl<K: AsRef<[u8]>> Drop for TreeNode<K> {
         // Parent does not need to be dropped because it does not own the child.
         // The parent's existence is managed by its own scope/lifetime.
     }
+}
+
+fn find_diff_in_children<'a, K: Eq + Ord + Clone + AsRef<[u8]>>(
+    self_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
+    other_children: &'a BTreeMap<K, NonNull<TreeNode<K>>>,
+) -> Option<(Vec<&'a K>, Vec<&'a K>)> {
+    let mut diff1 = Vec::new();
+    let mut diff2 = Vec::new();
+    let mut common = Vec::new(); // To store common keys for further processing
+
+    let mut iter_self = self_children.iter();
+    let mut iter_other = other_children.iter();
+
+    let mut next_self = iter_self.next();
+    let mut next_other = iter_other.next();
+
+    while next_self.is_some() || next_other.is_some() {
+        match (next_self, next_other) {
+            (Some((key_self, value_self)), Some((key_other, value_other))) => {
+                match key_self.cmp(key_other) {
+                    std::cmp::Ordering::Less => {
+                        // key_self is unique to self
+                        diff1.push(key_self);
+                        next_self = iter_self.next();
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // key_other is unique to other
+                        diff2.push(key_other);
+                        next_other = iter_other.next();
+                    }
+                    std::cmp::Ordering::Equal => {
+                        // key is present in both maps, check for differences in values
+                        common.push((unsafe { value_self.as_ref() }, unsafe {
+                            value_other.as_ref()
+                        }));
+                        next_self = iter_self.next();
+                        next_other = iter_other.next();
+                    }
+                }
+            }
+            (Some((key_self, _)), None) => {
+                // Remaining keys in self
+                diff1.push(key_self);
+                next_self = iter_self.next();
+            }
+            (None, Some((key_other, _))) => {
+                // Remaining keys in other
+                diff2.push(key_other);
+                next_other = iter_other.next();
+            }
+            (None, None) => break,
+        }
+    }
+
+    // Process common keys to find differences
+    common
+        .iter()
+        .filter_map(|(child1, child2)| child1.find_difference(child2))
+        .for_each(|(mut child1, mut child2)| {
+            diff1.append(&mut child1);
+            diff2.append(&mut child2);
+        });
+
+    Some((diff1, diff2))
 }
