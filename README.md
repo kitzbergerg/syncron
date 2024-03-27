@@ -2,7 +2,7 @@
 
 Syncron is a highly efficient, eventually consistent filesystem synchronization tool using Rust. This tool is designed to be scalable, supporting everything from simple one-to-one client-server setups to complex decentralized, n-to-n file synchronization networks.
 
-https://github.com/kitzbergerg/syncron/assets/33102273/33e3c736-319d-466d-a44d-2ed873a64d31
+https://github.com/kitzbergerg/syncron/assets/33102273/7585b4de-f4a5-4e5f-b0f7-3d13e3583af7
 
 Note: Syncron is a hobby project in early development. See [Implementation Phases](#implementation-phases) for development status.
 
