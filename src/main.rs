@@ -49,39 +49,33 @@ mod datastructures;
 mod filesystem;
 
 const TEST_DIR: &str = "C:\\Dev\\Rust\\syncron";
+
 fn main() {
-    let mut tree1 = compute_tree();
-    let mut tree2 = compute_tree();
+    let mut tree1 = compute_tree(TEST_DIR);
+    let mut tree2 = compute_tree(TEST_DIR);
 
     loop {
         let diff = tree1.find_difference(&tree2);
-        match diff {
-            None => println!("No change."),
-            Some((diff1, diff2)) => {
-                println!("Changed locally: {diff1:?}, changed remote: {diff2:?}")
-            }
+        if let Some((diff1, diff2)) = diff {
+            println!("Changed locally: {diff1:?}, changed remote: {diff2:?}")
         }
 
-        sleep(Duration::from_millis(100));
-        // TODO: merge changes into first tree instead of computing second tree and then switching
-        tree2 = compute_tree();
+        sleep(Duration::from_millis(100)); // TODO: merge changes into first tree instead of computing second tree and then switching
+        tree2 = compute_tree(TEST_DIR);
         std::mem::swap(&mut tree1, &mut tree2);
     }
 }
 
-fn compute_tree() -> MerkleTree<String> {
+fn compute_tree(path: &str) -> MerkleTree<String> {
     let mut tree = MerkleTree::<String>::new(
-        TEST_DIR.to_string(),
-        MerkleEntry::from_path(Path::new(TEST_DIR).to_owned()),
+        path.to_string(),
+        MerkleEntry::from_path(Path::new(&path).to_owned()),
     );
 
-    let receiver = walk_directory(Path::new(TEST_DIR).to_owned());
+    let receiver = walk_directory(Path::new(&path).to_owned());
 
     while let Ok(message) = receiver.recv() {
-        let path = message
-            .get_path()
-            .strip_prefix(TEST_DIR)
-            .expect("invalid path");
+        let path = message.get_path().strip_prefix(path).expect("invalid path");
         let path_components = path
             .components()
             .map(|comp| comp.as_os_str().to_str().unwrap().to_owned())

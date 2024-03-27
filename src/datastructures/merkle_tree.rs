@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
@@ -10,6 +12,7 @@ use blake3::Hash as BHash;
 
 use crate::filesystem::data::MerkleEntry;
 
+// TODO: figure out how to handle copied files (currently hashes would overwrite each other)
 type TreeNodeDiffResult<'a> = HashMap<&'a BHash, (u64, &'a MerkleEntry)>;
 
 pub struct MerkleTree<K: AsRef<[u8]>> {
